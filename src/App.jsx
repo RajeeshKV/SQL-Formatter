@@ -3,30 +3,49 @@ import React, { useState } from "react";
 function formatSQL(input) {
   if (!input) return "";
 
-  let sql = input.replace(/\s+/g, " ").trim();
   let indentLevel = 0;
   const indent = () => "    ".repeat(indentLevel);
   const result = [];
 
-  const batches = sql.split(/\bGO\b/i);
+  // Split by GO while preserving comments
+  const batches = input.split(/^GO\s*$/gim);
 
   for (let batch of batches) {
     batch = batch.trim();
     if (!batch) continue;
 
-    batch = batch
-      .replace(/\bBEGIN\b/gi, "\nBEGIN\n")
-      .replace(/\bEND\b/gi, "\nEND\n")
-      .replace(/;/g, ";\n");
-
-    const lines = batch.split("\n").map((line) => line.trim()).filter(Boolean);
+    const lines = batch.split("\n");
 
     for (let line of lines) {
-      if (/^END/i.test(line)) indentLevel = Math.max(indentLevel - 1, 0);
+      line = line.trim();
+      if (!line) continue;
 
-      result.push(indent() + line);
+      // Preserve comment lines as-is
+      if (/^--/.test(line) || /^\/\*/.test(line) || /\*\/$/.test(line)) {
+        result.push(indent() + line);
+        continue;
+      }
 
-      if (/^BEGIN/i.test(line)) indentLevel++;
+      // Check for END before formatting to adjust indent first
+      if (/^END\b/i.test(line)) {
+        indentLevel = Math.max(indentLevel - 1, 0);
+      }
+
+      // Split only on SQL keywords, but NOT within comments
+      let formatted = line
+        .replace(/\b(SELECT|FROM|WHERE|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|ORDER\s+BY|GROUP\s+BY|HAVING|VALUES|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|UNION|EXCEPT|INTERSECT)\b/gi, "\n$1")
+        .replace(/;(?!-)/g, ";\n");
+
+      const subLines = formatted.split("\n").map(l => l.trim()).filter(Boolean);
+
+      for (let subLine of subLines) {
+        result.push(indent() + subLine);
+      }
+
+      // Check for BEGIN after adding to adjust indent
+      if (/^BEGIN\b/i.test(line)) {
+        indentLevel++;
+      }
     }
 
     result.push("GO", "");
