@@ -10,7 +10,8 @@ function formatSQL(input) {
   // Split by GO while preserving comments
   const batches = input.split(/^GO\s*$/gim);
 
-  for (let batch of batches) {
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    let batch = batches[batchIndex];
     batch = batch.trim();
     if (!batch) continue;
 
@@ -20,10 +21,18 @@ function formatSQL(input) {
       line = line.trim();
       if (!line) continue;
 
-      // Preserve comment lines as-is
+      // Preserve full comment lines as-is
       if (/^--/.test(line) || /^\/\*/.test(line) || /\*\/$/.test(line)) {
         result.push(indent() + line);
         continue;
+      }
+
+      // Extract inline comment if present
+      let inlineComment = "";
+      if (line.includes("--")) {
+        const parts = line.split("--");
+        line = parts[0].trim();
+        inlineComment = " -- " + parts.slice(1).join("--").trim();
       }
 
       // Check for END before formatting to adjust indent first
@@ -31,15 +40,20 @@ function formatSQL(input) {
         indentLevel = Math.max(indentLevel - 1, 0);
       }
 
-      // Split only on SQL keywords, but NOT within comments
+      // Add newlines before all major SQL keywords
       let formatted = line
-        .replace(/\b(SELECT|FROM|WHERE|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|ORDER\s+BY|GROUP\s+BY|HAVING|VALUES|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|UNION|EXCEPT|INTERSECT)\b/gi, "\n$1")
+        .replace(/\b(BEGIN|END|SELECT|FROM|WHERE|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|CROSS\s+JOIN|ORDER\s+BY|GROUP\s+BY|HAVING|VALUES|INSERT\s+INTO|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|UNION|UNION\s+ALL|EXCEPT|INTERSECT|ON|AND|OR|CASE|WHEN|THEN|ELSE|AS)\b/gi, "\n$1")
         .replace(/;(?!-)/g, ";\n");
 
       const subLines = formatted.split("\n").map(l => l.trim()).filter(Boolean);
 
       for (let subLine of subLines) {
-        result.push(indent() + subLine);
+        // Add inline comment back to the last line if present
+        if (inlineComment && subLine === subLines[subLines.length - 1]) {
+          result.push(indent() + subLine + inlineComment);
+        } else {
+          result.push(indent() + subLine);
+        }
       }
 
       // Check for BEGIN after adding to adjust indent
@@ -48,7 +62,10 @@ function formatSQL(input) {
       }
     }
 
-    result.push("GO", "");
+    // Add GO statement with proper spacing
+    if (batchIndex < batches.length - 1 || batch.trim()) {
+      result.push("GO");
+    }
   }
 
   return result.join("\n").trimEnd();
