@@ -7,74 +7,120 @@ function formatSQL(input) {
   const indent = () => "    ".repeat(indentLevel);
   const result = [];
 
-  // Split by GO while preserving comments
+  // Protect string literals (VERY IMPORTANT)
+  const stringLiterals = [];
+  input = input.replace(/N?'[^']*'/g, (match) => {
+    stringLiterals.push(match);
+    return `__STR_${stringLiterals.length - 1}__`;
+  });
+
   const batches = input.split(/^GO\s*$/gim);
 
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    let batch = batches[batchIndex];
-    batch = batch.trim();
+    let batch = batches[batchIndex].trim();
     if (!batch) continue;
 
-    const lines = batch.split("\n");
+    // Normalize spacing
+    batch = batch.replace(/\r/g, "");
+
+    // Break important keywords into lines
+    batch = batch
+      .replace(/\bBEGIN\b/gi, "\nBEGIN\n")
+      .replace(/\bEND\b/gi, "\nEND\n")
+      .replace(/\bIF\b/gi, "\nIF")
+      .replace(/\bELSE\b/gi, "\nELSE\n")
+      .replace(/\bMERGE\b/gi, "\nMERGE")
+      .replace(/\bUSING\b/gi, "\nUSING")
+      .replace(/\bWHEN MATCHED\b/gi, "\nWHEN MATCHED")
+      .replace(/\bWHEN NOT MATCHED\b/gi, "\nWHEN NOT MATCHED")
+      .replace(/\bINSERT\b/gi, "\nINSERT")
+      .replace(/\bUPDATE\b/gi, "\nUPDATE")
+      .replace(/\bSELECT\b/gi, "\nSELECT")
+      .replace(/\bFROM\b/gi, "\nFROM")
+      .replace(/\bWHERE\b/gi, "\nWHERE")
+      .replace(/\bJOIN\b/gi, "\nJOIN")
+      .replace(/\bON\b/gi, "\nON")
+      .replace(/\bSET\b/gi, "\nSET")
+      .replace(/\bVALUES\b/gi, "\nVALUES")
+      .replace(/\bOUTPUT\b/gi, "\nOUTPUT")
+      .replace(/\bDECLARE\b/gi, "\nDECLARE")
+      .replace(/\bEXEC\b/gi, "\nEXEC")
+      .replace(/\bWITH\b/gi, "\nWITH")
+      .replace(/;/g, ";\n");
+
+    let lines = batch.split("\n").map(l => l.trim()).filter(Boolean);
+
+    let insideCreateType = false;
 
     for (let line of lines) {
-      line = line.trim();
-      if (!line) continue;
 
-      // Preserve full comment lines as-is
-      if (/^--/.test(line) || /^\/\*/.test(line) || /\*\/$/.test(line)) {
+      // Restore strings
+      line = line.replace(/__STR_(\d+)__/g, (_, i) => stringLiterals[i]);
+
+      // Detect CREATE TYPE TABLE block
+      if (/CREATE\s+TYPE.*AS\s+TABLE/i.test(line)) {
+        insideCreateType = true;
         result.push(indent() + line);
         continue;
       }
 
-      // Extract inline comment if present
-      let inlineComment = "";
-      if (line.includes("--")) {
-        const parts = line.split("--");
-        line = parts[0].trim();
-        inlineComment = " -- " + parts.slice(1).join("--").trim();
+      if (insideCreateType) {
+        if (line.includes("(")) {
+          result.push(indent() + "(");
+          indentLevel++;
+          continue;
+        }
+
+        if (line.includes(")")) {
+          indentLevel--;
+          result.push(indent() + ")");
+          insideCreateType = false;
+          continue;
+        }
+
+        // Format columns
+        result.push(indent() + line.replace(/,\s*/g, ","));
+        continue;
       }
 
-      // Check for END before formatting to adjust indent first
+      // Handle END (reduce before printing)
       if (/^END\b/i.test(line)) {
         indentLevel = Math.max(indentLevel - 1, 0);
       }
 
-      // Add newlines before all major SQL keywords
-      let formatted = line
-        .replace(/\b(BEGIN|END|SELECT|FROM|WHERE|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|CROSS\s+JOIN|OUTER\s+APPLY|CROSS\s+APPLY|ORDER\s+BY|GROUP\s+BY|HAVING|VALUES|INSERT\s+INTO|INSERT|UPDATE|DELETE|ALTER\s+TABLE|ALTER\s+PROCEDURE|ALTER\s+PROC|ALTER|CREATE\s+TABLE|CREATE\s+PROCEDURE|CREATE\s+PROC|CREATE\s+TYPE|CREATE|DROP\s+TABLE|DROP\s+TYPE|DROP\s+PROCEDURE|DROP\s+PROC|DROP|UNION|UNION\s+ALL|EXCEPT|INTERSECT|ON|AND|OR|CASE|WHEN|THEN|ELSE|AS|WITH|USING|MERGE|WHEN\s+MATCHED|WHEN\s+NOT\s+MATCHED|OUTPUT|DECLARE|SET|EXEC|PARTITION\s+BY|FOR|COMMIT|ROLLBACK|BEGIN\s+TRANSACTION|BEGIN\s+TRAN|IF|WHILE)\b/gi, "\n$1")
-        .replace(/;(?!-)/g, ";\n");
-
-      const subLines = formatted.split("\n").map(l => l.trim()).filter(Boolean);
-
-      for (let subLine of subLines) {
-        // Add inline comment back to the last line if present
-        if (inlineComment && subLine === subLines[subLines.length - 1]) {
-          result.push(indent() + subLine + inlineComment);
-        } else {
-          result.push(indent() + subLine);
-        }
-      }
-
-      // Check for BEGIN/WITH after adding to adjust indent
-      if (/^BEGIN\b/i.test(line) || /^WITH\b/i.test(line) || /^CASE\b/i.test(line)) {
-        indentLevel++;
-      }
-
-      // Decrease indent for ELSE and WHEN in CASE
-      if (/^ELSE\b/i.test(line) && !/^END/i.test(line)) {
+      // Handle ELSE (same level as IF)
+      if (/^ELSE\b/i.test(line)) {
         indentLevel = Math.max(indentLevel - 1, 0);
+      }
+
+      result.push(indent() + line);
+
+      // Increase indent after BEGIN / IF / WITH / MERGE
+      if (
+        /^BEGIN\b/i.test(line) ||
+        /^IF\b/i.test(line) ||
+        /^WITH\b/i.test(line) ||
+        /^MERGE\b/i.test(line)
+      ) {
         indentLevel++;
+      }
+
+      // Special: WHEN MATCHED / NOT MATCHED
+      if (/^WHEN\b/i.test(line)) {
+        indentLevel++;
+      }
+
+      // Reduce indent after INSERT/UPDATE blocks in MERGE
+      if (/^OUTPUT\b/i.test(line)) {
+        indentLevel = Math.max(indentLevel - 1, 0);
       }
     }
 
-    // Add GO statement with proper spacing
-    if (batchIndex < batches.length - 1 || batch.trim()) {
-      result.push("GO");
-    }
+    result.push("GO");
+    result.push("");
   }
 
-  return result.join("\n").trimEnd();
+  return result.join("\n").trim();
 }
 
 export default function App() {
