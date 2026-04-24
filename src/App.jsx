@@ -42,7 +42,7 @@ function formatSQL(input) {
 
       // Add newlines before all major SQL keywords
       let formatted = line
-        .replace(/\b(BEGIN|END|SELECT|FROM|WHERE|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|CROSS\s+JOIN|ORDER\s+BY|GROUP\s+BY|HAVING|VALUES|INSERT\s+INTO|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|UNION|UNION\s+ALL|EXCEPT|INTERSECT|ON|AND|OR|CASE|WHEN|THEN|ELSE|AS)\b/gi, "\n$1")
+        .replace(/\b(BEGIN|END|SELECT|FROM|WHERE|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|CROSS\s+JOIN|OUTER\s+APPLY|CROSS\s+APPLY|ORDER\s+BY|GROUP\s+BY|HAVING|VALUES|INSERT\s+INTO|INSERT|UPDATE|DELETE|ALTER\s+TABLE|ALTER\s+PROCEDURE|ALTER\s+PROC|ALTER|CREATE\s+TABLE|CREATE\s+PROCEDURE|CREATE\s+PROC|CREATE\s+TYPE|CREATE|DROP\s+TABLE|DROP\s+TYPE|DROP\s+PROCEDURE|DROP\s+PROC|DROP|UNION|UNION\s+ALL|EXCEPT|INTERSECT|ON|AND|OR|CASE|WHEN|THEN|ELSE|AS|WITH|USING|MERGE|WHEN\s+MATCHED|WHEN\s+NOT\s+MATCHED|OUTPUT|DECLARE|SET|EXEC|PARTITION\s+BY|FOR|COMMIT|ROLLBACK|BEGIN\s+TRANSACTION|BEGIN\s+TRAN|IF|WHILE)\b/gi, "\n$1")
         .replace(/;(?!-)/g, ";\n");
 
       const subLines = formatted.split("\n").map(l => l.trim()).filter(Boolean);
@@ -56,8 +56,14 @@ function formatSQL(input) {
         }
       }
 
-      // Check for BEGIN after adding to adjust indent
-      if (/^BEGIN\b/i.test(line)) {
+      // Check for BEGIN/WITH after adding to adjust indent
+      if (/^BEGIN\b/i.test(line) || /^WITH\b/i.test(line) || /^CASE\b/i.test(line)) {
+        indentLevel++;
+      }
+
+      // Decrease indent for ELSE and WHEN in CASE
+      if (/^ELSE\b/i.test(line) && !/^END/i.test(line)) {
+        indentLevel = Math.max(indentLevel - 1, 0);
         indentLevel++;
       }
     }
