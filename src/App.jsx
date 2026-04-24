@@ -3,124 +3,83 @@ import React, { useState } from "react";
 function formatSQL(input) {
   if (!input) return "";
 
+  // Normalize
+  let sql = input
+    .replace(/\r\n/g, "\n")
+    .replace(/\s+/g, " ")
+    .replace(/\s*GO\s*/gi, "\nGO\n");
+
+  const lines = [];
   let indentLevel = 0;
   const indent = () => "    ".repeat(indentLevel);
-  const result = [];
 
-  // Protect string literals (VERY IMPORTANT)
-  const stringLiterals = [];
-  input = input.replace(/N?'[^']*'/g, (match) => {
-    stringLiterals.push(match);
-    return `__STR_${stringLiterals.length - 1}__`;
-  });
+  const tokens = sql.split("\n");
 
-  const batches = input.split(/^GO\s*$/gim);
+  for (let raw of tokens) {
+    let line = raw.trim();
+    if (!line) continue;
 
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    let batch = batches[batchIndex].trim();
-    if (!batch) continue;
+    // Handle GO
+    if (/^GO$/i.test(line)) {
+      lines.push("GO");
+      lines.push("");
+      continue;
+    }
 
-    // Normalize spacing
-    batch = batch.replace(/\r/g, "");
-
-    // Break important keywords into lines
-    batch = batch
+    // Expand BEGIN/END blocks
+    line = line
       .replace(/\bBEGIN\b/gi, "\nBEGIN\n")
-      .replace(/\bEND\b/gi, "\nEND\n")
-      .replace(/\bIF\b/gi, "\nIF")
-      .replace(/\bELSE\b/gi, "\nELSE\n")
-      .replace(/\bMERGE\b/gi, "\nMERGE")
-      .replace(/\bUSING\b/gi, "\nUSING")
-      .replace(/\bWHEN MATCHED\b/gi, "\nWHEN MATCHED")
-      .replace(/\bWHEN NOT MATCHED\b/gi, "\nWHEN NOT MATCHED")
-      .replace(/\bINSERT\b/gi, "\nINSERT")
-      .replace(/\bUPDATE\b/gi, "\nUPDATE")
-      .replace(/\bSELECT\b/gi, "\nSELECT")
-      .replace(/\bFROM\b/gi, "\nFROM")
-      .replace(/\bWHERE\b/gi, "\nWHERE")
-      .replace(/\bJOIN\b/gi, "\nJOIN")
-      .replace(/\bON\b/gi, "\nON")
-      .replace(/\bSET\b/gi, "\nSET")
-      .replace(/\bVALUES\b/gi, "\nVALUES")
-      .replace(/\bOUTPUT\b/gi, "\nOUTPUT")
-      .replace(/\bDECLARE\b/gi, "\nDECLARE")
-      .replace(/\bEXEC\b/gi, "\nEXEC")
-      .replace(/\bWITH\b/gi, "\nWITH")
-      .replace(/;/g, ";\n");
+      .replace(/\bEND\b/gi, "\nEND\n");
 
-    let lines = batch.split("\n").map(l => l.trim()).filter(Boolean);
+    const subLines = line.split("\n").map(l => l.trim()).filter(Boolean);
 
-    let insideCreateType = false;
+    for (let sub of subLines) {
 
-    for (let line of lines) {
-
-      // Restore strings
-      line = line.replace(/__STR_(\d+)__/g, (_, i) => stringLiterals[i]);
-
-      // Detect CREATE TYPE TABLE block
-      if (/CREATE\s+TYPE.*AS\s+TABLE/i.test(line)) {
-        insideCreateType = true;
-        result.push(indent() + line);
-        continue;
-      }
-
-      if (insideCreateType) {
-        if (line.includes("(")) {
-          result.push(indent() + "(");
-          indentLevel++;
-          continue;
-        }
-
-        if (line.includes(")")) {
-          indentLevel--;
-          result.push(indent() + ")");
-          insideCreateType = false;
-          continue;
-        }
-
-        // Format columns
-        result.push(indent() + line.replace(/,\s*/g, ","));
-        continue;
-      }
-
-      // Handle END (reduce before printing)
-      if (/^END\b/i.test(line)) {
+      // Decrease before END
+      if (/^END\b/i.test(sub)) {
         indentLevel = Math.max(indentLevel - 1, 0);
       }
 
-      // Handle ELSE (same level as IF)
-      if (/^ELSE\b/i.test(line)) {
-        indentLevel = Math.max(indentLevel - 1, 0);
-      }
-
-      result.push(indent() + line);
-
-      // Increase indent after BEGIN / IF / WITH / MERGE
-      if (
-        /^BEGIN\b/i.test(line) ||
-        /^IF\b/i.test(line) ||
-        /^WITH\b/i.test(line) ||
-        /^MERGE\b/i.test(line)
-      ) {
+      // CREATE TYPE special handling
+      if (/CREATE TYPE/i.test(sub) && /AS TABLE\(/i.test(sub)) {
+        sub = sub.replace(/\(/, "\n(\n");
         indentLevel++;
       }
 
-      // Special: WHEN MATCHED / NOT MATCHED
-      if (/^WHEN\b/i.test(line)) {
+      // Break columns inside TYPE
+      if (indentLevel > 0 && sub.includes(",") && sub.includes("[")) {
+        sub = sub.split(",").join(",\n" + indent());
+      }
+
+      // MERGE formatting
+      sub = sub
+        .replace(/\bUSING\b/gi, "\nUSING")
+        .replace(/\bWHEN MATCHED\b/gi, "\nWHEN MATCHED")
+        .replace(/\bWHEN NOT MATCHED\b/gi, "\nWHEN NOT MATCHED")
+        .replace(/\bUPDATE SET\b/gi, "\nUPDATE SET\n")
+        .replace(/\bINSERT\b/gi, "\nINSERT")
+        .replace(/\bVALUES\b/gi, "\nVALUES");
+
+      // Break SET columns
+      if (/SET/i.test(sub) && sub.includes(",")) {
+        sub = sub.replace(/,/g, ",\n" + indent());
+      }
+
+      lines.push(indent() + sub);
+
+      // Increase after BEGIN
+      if (/^BEGIN\b/i.test(sub)) {
         indentLevel++;
       }
 
-      // Reduce indent after INSERT/UPDATE blocks in MERGE
-      if (/^OUTPUT\b/i.test(line)) {
+      // Close TYPE block
+      if (/^\)$/i.test(sub)) {
         indentLevel = Math.max(indentLevel - 1, 0);
       }
     }
-
-    result.push("GO");
-    result.push("");
   }
 
-  return result.join("\n").trim();
+  return lines.join("\n").trim();
 }
 
 export default function App() {
